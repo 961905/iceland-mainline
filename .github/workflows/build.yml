@@ -18,8 +18,10 @@ permissions:
 
 jobs:
   bl-kernel:
-    # native arm64 runner (public repo, free): arm64 containers run without
-    # qemu emulation — the amd64+binfmt path broke on dpkg -x (tar ENOSYS)
+    # native arm64 runner: the kernel itself compiles natively (the heavy
+    # part).  The kernel repo's main stages still run in an amd64 container
+    # (edk2 BaseTools are x86_64 binaries), so qemu-x86_64 binfmt is needed —
+    # reverse emulation, light load (EFI toolchain only).
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 90
     steps:
@@ -41,6 +43,13 @@ jobs:
             https://github.com/SuperTurtleDev/iceland-mainline-bootloader.git bootloader
           git clone --depth 1 \
             https://github.com/SuperTurtleDev/iceland-build-container.git podman_container
+
+      - name: qemu-x86_64 binfmt (amd64 stages run x86 containers via emulation)
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y --no-install-recommends qemu-user-static
+          docker run --rm --privileged multiarch/qemu-user-static --reset -p yes
+          ls /proc/sys/fs/binfmt_misc/ | grep -i 'qemu-x86_64'
 
       - name: rootless podman prereqs
         run: |
@@ -73,8 +82,10 @@ jobs:
           path: out
 
   userspace:
-    # native arm64 runner: debootstrap + the sensors deb build run natively,
-    # no qemu binfmt needed at all
+    # native arm64 runner: debootstrap + the sensors deb build run natively
+    # (host arch == target arch, no emulation involved).  upstream's
+    # build.sh hard-requires a qemu-aarch64 binfmt entry (it assumes an
+    # x86 host); patch that check out after clone.
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 120
     steps:
@@ -83,6 +94,24 @@ jobs:
           git clone --depth 1 "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}.git" .
           git clone --depth 1 --recursive --shallow-submodules \
             https://github.com/SuperTurtleDev/iceland-mainline-userspace.git userspace
+
+      - name: "patch: skip the qemu-aarch64 guard on aarch64 hosts"
+        run: |
+          python3 - <<'PY'
+          import re
+          for f in ("userspace/build.sh", "userspace/scripts/build-tree.sh"):
+              s = open(f).read()
+              # match both one-line and two-line variants of the guard
+              new = re.sub(
+                  r'^\[ -e /proc/sys/fs/binfmt_misc/qemu-aarch64 \](?:.*die[^\n]*qemu-aarch64[^\n]*\n| \\\n[^\n]*die[^\n]*qemu-aarch64[^\n]*\n)',
+                  '# arm64 host: native execution, binfmt guard not applicable\n',
+                  s, flags=re.M)
+              if 'binfmt_misc/qemu-aarch64' in new:
+                  raise SystemExit(f"guard still present in {f}")
+              open(f, "w").write(new)
+              print(f"patched {f}")
+          PY
+          grep -n 'qemu-aarch64' userspace/build.sh userspace/scripts/build-tree.sh || echo "guards removed"
 
       - name: builduserspace.sh
         run: bash scripts/builduserspace.sh
