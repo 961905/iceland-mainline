@@ -11,7 +11,7 @@
 #                 RAW (no BootApp prefix) TestBootApp RAM-staging set
 #     tools/makeblob  tools/deployclient      host deploy tools
 #     debs/linux-{firmware-iceland,headers,image,modules,tools}_*_arm64.deb
-#     kernel.img dtb.img initrd_debug.img initrd_charge.img  (+ .img set)
+#     kernel.img dtb.img initrd_debug.img  (+ .img set)
 set -euo pipefail
 
 SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -42,7 +42,7 @@ for f in \
     ramdeploy/dtb_ramdeploy.bin ramdeploy/initrd_ramdeploy.bin \
     ramdeploy/initrd_debug_ramdeploy.bin \
     tools/makeblob tools/deployclient \
-    kernel.img dtb.img initrd_debug.img initrd_charge.img; do
+    kernel.img dtb.img initrd_debug.img; do
     [ -e "${OUT}/${f}" ] || die "contract output missing after build: ${f}"
 done
 for package in firmware headers image modules tools; do
