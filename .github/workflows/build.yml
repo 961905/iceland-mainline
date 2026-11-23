@@ -18,10 +18,11 @@ permissions:
 
 jobs:
   bl-kernel:
-    # native arm64 runner: the kernel itself compiles natively (the heavy
-    # part).  The kernel repo's main stages still run in an amd64 container
-    # (edk2 BaseTools are x86_64 binaries), so qemu-x86_64 binfmt is needed —
-    # reverse emulation, light load (EFI toolchain only).
+    # native arm64 runner, native arm64 containers: the kernel is
+    # ARCH=arm64 LLVM=1 (native compile here), edk2 BaseTools build
+    # natively, kernel host tools are aarch64 anyway.  The provision patch
+    # flips the default amd64-labelled container to an arm64 rootfs with
+    # the union of both package lists — no emulation anywhere.
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 90
     steps:
@@ -44,18 +45,52 @@ jobs:
           git clone --depth 1 \
             https://github.com/SuperTurtleDev/iceland-build-container.git podman_container
 
-      - name: qemu-x86_64 binfmt (amd64 stages run x86 containers via emulation)
+      - name: "patch: all-arm64 containers (no emulation)"
         run: |
-          sudo apt-get update -q
-          sudo apt-get install -y --no-install-recommends qemu-user-static
-          # arm64 build of qemu-user-static ships ALL guest handlers and
-          # registers them via update-binfmts; multiarch/qemu-user-static is
-          # amd64-only so its container can't run here (chicken-and-egg).
-          if [ ! -e /proc/sys/fs/binfmt_misc/qemu-x86_64 ]; then
-            sudo update-binfmts --enable qemu-x86_64 || true
-            sudo systemctl restart systemd-binfmt 2>/dev/null || true
-          fi
-          ls /proc/sys/fs/binfmt_misc/ | grep -i 'qemu-x86_64'
+          python3 - <<'PY'
+          # 1) provision.sh: the amd64-labelled default container becomes an
+          #    arm64 rootfs, packages.list gains the union of the arm64 list
+          #    (same clang-21 -> CONFIG_CC_VERSION_TEXT matches the hdr-tools
+          #    container) plus the packaging/esp-img tools the main stages
+          #    need; drop the cross gcc (deployd compiles natively).
+          s = open("podman_container/provision.sh").read()
+          a = 'case "${ARCH}" in\n    amd64) MACHINE=x86_64;  PKGLIST="packages.list" ;;'
+          b = 'case "${ARCH}" in\n    amd64) MACHINE=aarch64; PKGLIST="packages-ci.list" ;;'
+          assert a in s, "provision.sh arch case not found"
+          s = s.replace(a, b)
+          open("podman_container/provision.sh", "w").write(s)
+
+          # 2) build-deployd.sh: native static build instead of cross
+          s = open("kernel/scripts/build-deployd.sh").read()
+          s = s.replace("aarch64-linux-gnu-gcc -static", "gcc -static")
+          s = s.replace(
+              'command -v aarch64-linux-gnu-gcc >/dev/null 2>&1 \\\n'
+              '    || die "aarch64-linux-gnu-gcc missing (add gcc-aarch64-linux-gnu + libc6-dev-arm64-cross to packages.list)"',
+              'command -v gcc >/dev/null 2>&1 || die "gcc missing"')
+          assert "aarch64-linux-gnu-gcc" not in s, "cross gcc still referenced"
+          assert "gcc -static" in s
+          open("kernel/scripts/build-deployd.sh", "w").write(s)
+          print("provision.sh + build-deployd.sh patched")
+          PY
+          # 3) packages-ci.list: union of both upstream lists (arm64 container
+          #    needs the main list's esp-img/packaging/deb tools), minus the
+          #    cross gcc pair.  Kept as a workflow-embedded file so the
+          #    provision patch can reference it without touching upstream.
+          {
+            echo "# CI union list: packages.list + packages-arm64.list minus"
+            echo "# gcc-aarch64-linux-gnu/libc6-dev-arm64-cross (native arm64"
+            echo "# container, no cross compiler needed)."
+            echo "# See upstream lists for the rationale of each entry."
+            grep -hE -v '^[[:space:]]*(#|$)' podman_container/packages.list \
+                 podman_container/packages-arm64.list | \
+              grep -v -e '^gcc-aarch64-linux-gnu$' -e '^libc6-dev-arm64-cross$' | \
+              sed 's/[[:space:]]*#.*//' | awk 'NF' | sort -u
+          } > podman_container/packages-ci.list
+          echo "--- packages-ci.list:"; cat podman_container/packages-ci.list
+          # 4) verify.sh (host side) needs zstd; it is preinstalled on GH
+          #    runners, install it explicitly anyway
+          sudo apt-get update -q && sudo apt-get install -y --no-install-recommends zstd
+          zstd --version
 
       - name: rootless podman prereqs
         run: |
@@ -145,8 +180,12 @@ jobs:
           path: out
 
   package:
+    # arm64 runner: makeblob/deployclient come out of the arm64 container
+    # (aarch64 ELF); the blob format itself is arch-neutral, and zstd/dpkg
+    # run natively here.  (deployclient is recompiled locally on the deploy
+    # host when needed — its C source ships in products/kernel.)
+    runs-on: ubuntu-24.04-arm
     needs: [bl-kernel, userspace]
-    runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
       - uses: actions/download-artifact@v4
