@@ -48,7 +48,13 @@ jobs:
         run: |
           sudo apt-get update -q
           sudo apt-get install -y --no-install-recommends qemu-user-static
-          docker run --rm --privileged multiarch/qemu-user-static --reset -p yes
+          # arm64 build of qemu-user-static ships ALL guest handlers and
+          # registers them via update-binfmts; multiarch/qemu-user-static is
+          # amd64-only so its container can't run here (chicken-and-egg).
+          if [ ! -e /proc/sys/fs/binfmt_misc/qemu-x86_64 ]; then
+            sudo update-binfmts --enable qemu-x86_64 || true
+            sudo systemctl restart systemd-binfmt 2>/dev/null || true
+          fi
           ls /proc/sys/fs/binfmt_misc/ | grep -i 'qemu-x86_64'
 
       - name: rootless podman prereqs
