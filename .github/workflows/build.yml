@@ -70,6 +70,19 @@ jobs:
           assert "aarch64-linux-gnu-gcc" not in s, "cross gcc still referenced"
           assert "gcc -static" in s
           open("kernel/scripts/build-deployd.sh", "w").write(s)
+
+          # 2b) initrd-modules.txt: drop the stale regmap-slimbus entry —
+          #     the kernel config has CONFIG_SLIMBUS unset, the module is
+          #     never built, and verify.sh samples the first manifest paths
+          #     (it would otherwise always fail on this line).
+          s = open("kernel/initrd-modules.txt").read()
+          n = len(s.splitlines())
+          s = "\n".join(
+              l for l in s.splitlines()
+              if "regmap-slimbus" not in l) + "\n"
+          open("kernel/initrd-modules.txt", "w").write(s)
+          print(f"initrd-modules.txt: dropped regmap-slimbus "
+                f"({n - 1} lines remain)")
           print("provision.sh + build-deployd.sh patched")
           PY
           # 3) packages-ci.list: union of both upstream lists (arm64 container
