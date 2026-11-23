@@ -18,7 +18,9 @@ permissions:
 
 jobs:
   bl-kernel:
-    runs-on: ubuntu-24.04
+    # native arm64 runner (public repo, free): arm64 containers run without
+    # qemu emulation — the amd64+binfmt path broke on dpkg -x (tar ENOSYS)
+    runs-on: ubuntu-24.04-arm
     timeout-minutes: 90
     steps:
       - name: reclaim disk (kernel tree + container are heavy)
@@ -39,13 +41,6 @@ jobs:
             https://github.com/SuperTurtleDev/iceland-mainline-bootloader.git bootloader
           git clone --depth 1 \
             https://github.com/SuperTurtleDev/iceland-build-container.git podman_container
-
-      - name: qemu binfmt for arm64 containers (kernel stages run arm64 images)
-        run: |
-          sudo apt-get update -q
-          sudo apt-get install -y --no-install-recommends qemu-user-static
-          docker run --rm --privileged multiarch/qemu-user-static --reset -p yes
-          ls /proc/sys/fs/binfmt_misc/ | grep -i aarch64
 
       - name: rootless podman prereqs
         run: |
@@ -78,7 +73,9 @@ jobs:
           path: out
 
   userspace:
-    runs-on: ubuntu-24.04
+    # native arm64 runner: debootstrap + the sensors deb build run natively,
+    # no qemu binfmt needed at all
+    runs-on: ubuntu-24.04-arm
     timeout-minutes: 120
     steps:
       - name: clone this repo + userspace (submodule from upstream)
@@ -86,13 +83,6 @@ jobs:
           git clone --depth 1 "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}.git" .
           git clone --depth 1 --recursive --shallow-submodules \
             https://github.com/SuperTurtleDev/iceland-mainline-userspace.git userspace
-
-      - name: qemu-user-static (arm64 emulation for debootstrap)
-        run: |
-          sudo apt-get update -q
-          sudo apt-get install -y --no-install-recommends qemu-user-static
-          docker run --rm --privileged multiarch/qemu-user-static --reset -p yes
-          ls /proc/sys/fs/binfmt_misc/ | grep -i aarch64
 
       - name: builduserspace.sh
         run: bash scripts/builduserspace.sh
