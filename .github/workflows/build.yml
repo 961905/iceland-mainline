@@ -27,15 +27,25 @@ jobs:
                        /usr/local/.ghcup /opt/hostedtoolcache/CodeQL || true
           df -h /
 
-      - name: clone main + kernel (recursive) + bl + container
+      - name: checkout this repo + submodules (kernel/bl/container from upstream)
         run: |
-          git clone --depth 1 https://github.com/SuperTurtleDev/iceland-mainline.git .
+          git clone --depth 1 "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}.git" .
+          git remote set-url origin "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}.git"
+          git config --unset-all extensions.partialclone 2>/dev/null || true
+          # submodules come from the upstream repos pinned in .gitmodules
           git clone --depth 1 --recursive --shallow-submodules \
             https://github.com/SuperTurtleDev/iceland-mainline-kernel.git kernel
           git clone --depth 1 --recursive --shallow-submodules \
             https://github.com/SuperTurtleDev/iceland-mainline-bootloader.git bootloader
           git clone --depth 1 \
             https://github.com/SuperTurtleDev/iceland-build-container.git podman_container
+
+      - name: qemu binfmt for arm64 containers (kernel stages run arm64 images)
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y --no-install-recommends qemu-user-static
+          docker run --rm --privileged multiarch/qemu-user-static --reset -p yes
+          ls /proc/sys/fs/binfmt_misc/ | grep -i aarch64
 
       - name: rootless podman prereqs
         run: |
@@ -71,9 +81,9 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 120
     steps:
-      - name: clone main + userspace
+      - name: clone this repo + userspace (submodule from upstream)
         run: |
-          git clone --depth 1 https://github.com/SuperTurtleDev/iceland-mainline.git .
+          git clone --depth 1 "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}.git" .
           git clone --depth 1 --recursive --shallow-submodules \
             https://github.com/SuperTurtleDev/iceland-mainline-userspace.git userspace
 
