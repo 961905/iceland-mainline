@@ -69,7 +69,9 @@ jobs:
           # OUT so the cache persists on the host across runs.
           marker = s.index("# ---- arm64 static busybox")
           L = [
-              "# ccache wrappers (compiler names only; see packages-ci.list)",
+              "# ccache wrappers (compiler names only; both package lists)",
+              "# NOTE: applies to every provisioned arch, so ccache must be",
+              "# installed in each; the PKGS assembly below appends it.",
               "rm -f /usr/local/bin/clang /usr/local/bin/clang++",
               "cat > /usr/local/bin/clang <<\\CEOF",
               "#!/bin/sh",
@@ -90,6 +92,13 @@ jobs:
               "",
           ]
           s = s[:marker] + "\n".join(L) + "\n" + s[marker:]
+          # ensure ccache in EVERY container (the wrappers are written in
+          # all of them): append to the PKGS assembly
+          a3 = 'PKGS="$(grep -E -v "^[[:space:]]*(#|$)" /packages.list | xargs)"'
+          b3 = ('PKGS="$(grep -E -v "^[[:space:]]*(#|$)" /packages.list | xargs)"\n'
+                'PKGS="${PKGS} ccache"')
+          assert a3 in s, "PKGS line not found"
+          s = s.replace(a3, b3)
           open("podman_container/provision.sh", "w").write(s)
 
           # 2) build-deployd.sh: native static build instead of cross
