@@ -37,13 +37,24 @@ jobs:
           git clone --depth 1 "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}.git" .
           git remote set-url origin "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}.git"
           git config --unset-all extensions.partialclone 2>/dev/null || true
-          # submodules come from the upstream repos pinned in .gitmodules
-          git clone --depth 1 --recursive --shallow-submodules \
-            https://github.com/SuperTurtleDev/iceland-mainline-kernel.git kernel
-          git clone --depth 1 --recursive --shallow-submodules \
-            https://github.com/SuperTurtleDev/iceland-mainline-bootloader.git bootloader
-          git clone --depth 1 \
-            https://github.com/SuperTurtleDev/iceland-build-container.git podman_container
+          # Submodules are pinned to the gitlinks recorded in this meta repo's
+          # tree (NOT branch tips): round 13->14 the upstream kernel repo moved
+          # its linux submodule pointer one commit and the build went from
+          # green to silently failing.  Pin = reproducible builds.
+          pin() {  # pin <repo-url> <path> <sha>
+            git clone "$1" "$2"
+            git -C "$2" checkout --detach "$3"
+          }
+          pin https://github.com/SuperTurtleDev/iceland-mainline-kernel.git kernel \
+            "$(git ls-tree HEAD kernel | awk '{print $3}')"
+          pin https://github.com/SuperTurtleDev/iceland-mainline-bootloader.git bootloader \
+            "$(git ls-tree HEAD bootloader | awk '{print $3}')"
+          pin https://github.com/SuperTurtleDev/iceland-build-container.git podman_container \
+            "$(git ls-tree HEAD podman_container | awk '{print $3}')"
+          # linux/firmware are nested submodules of kernel/ — pin those too
+          git -C kernel submodule update --init --depth 1 linux firmware
+          git -C kernel/linux  checkout --detach "$(git -C kernel ls-tree HEAD linux | awk '{print $3}')"
+          git -C kernel/firmware checkout --detach "$(git -C kernel ls-tree HEAD firmware | awk '{print $3}')"
 
       - name: "patch: all-arm64 containers (no emulation)"
         run: |
@@ -161,15 +172,17 @@ jobs:
       - name: cache container rootfs
         uses: actions/cache@v4
         with:
+          # build/ lives BESIDE the workspace (../build), not inside it —
+          # buildkernel's OUT resolves to <workspace>/../build/kernel
           path: |
-            build/kernel/podman-data
-            build/kernel/podman-data-arm64
+            ${{ github.workspace }}/../build/kernel/podman-data
+            ${{ github.workspace }}/../build/kernel/podman-data-arm64
           key: podman-arm64-${{ steps.revs.outputs.container }}
 
       - name: cache kernel ccache
         uses: actions/cache@v4
         with:
-          path: build/kernel/ccache
+          path: ${{ github.workspace }}/../build/kernel/ccache
           key: ccache-kernel-${{ steps.revs.outputs.linux }}
           restore-keys: ccache-kernel-
 
@@ -190,6 +203,36 @@ jobs:
 
       - name: "buildkernel.sh (after bl — initrd embeds bl's esp.img)"
         run: bash scripts/buildkernel.sh
+
+      - name: kernel failure diagnostics
+        if: failure()
+        run: |
+          K=../build/kernel
+          L="$K/logs/kernel-build.log"
+          echo "=== disk ===";   df -h / /home 2>/dev/null; du -sh "$K" 2>/dev/null
+          echo "=== memory ==="; free -h
+          echo "=== OOM? ===";   (dmesg 2>/dev/null || journalctl -k 2>/dev/null) | grep -iE "out of memory|oom-kill|killed process" | tail -5 || echo "(no OOM records)"
+          echo "=== error lines in kernel-build.log ==="
+          [ -f "$L" ] && grep -nE "error:|fatal:|undefined reference|No such file|segmentation|signal|Killed" "$L" | head -40 || echo "(log missing)"
+          echo "=== last 200 lines ==="
+          [ -f "$L" ] && tail -200 "$L" || true
+          echo "=== per-stage logs ==="; ls -la "$K/logs/" 2>/dev/null
+
+      - name: upload build logs on failure
+        if: failure()
+        run: |
+          # upload-artifact's search path is workspace-relative; ../ paths are
+          # unreliable — copy the logs inside first
+          mkdir -p kernel-logs
+          cp -r ../build/kernel/logs/. kernel-logs/ 2>/dev/null || true
+          du -sh kernel-logs
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: logs-bl-kernel-${{ github.run_attempt }}
+          path: kernel-logs
+          retention-days: 7
+          if-no-files-found: ignore
 
       - name: stage products
         run: |
