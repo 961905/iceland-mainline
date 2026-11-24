@@ -58,6 +58,33 @@ jobs:
           b = 'case "${ARCH}" in\n    amd64) MACHINE=aarch64; PKGLIST="packages-ci.list" ;;'
           assert a in s, "provision.sh arch case not found"
           s = s.replace(a, b)
+          # ccache wrappers for the compiler names kbuild invokes (LLVM=1).
+          # The symlinks above stay for the non-compiler tools; clang and
+          # clang++ become wrapper scripts (heredoc-written, shebang at
+          # column 0) pinning CCACHE_DIR to the mounted OUT so the cache
+          # persists on the host across runs.  rm first: writing through
+          # the symlink would overwrite the clang-21 binary itself.
+          marker = s.index("# ---- arm64 static busybox")
+          L = [
+              "# ccache wrappers (compiler names only; see packages-ci.list)",
+              "rm -f /usr/local/bin/clang /usr/local/bin/clang++",
+              "cat > /usr/local/bin/clang <<'EOF'",
+              "#!/bin/sh",
+              'export CCACHE_DIR="${CCACHE_DIR:-/work/out/ccache}"',
+              'export CCACHE_MAXSIZE="${CCACHE_MAXSIZE:-4G}"',
+              'exec ccache /usr/bin/clang-21 "$@"',
+              "EOF",
+              "cat > /usr/local/bin/clang++ <<'EOF'",
+              "#!/bin/sh",
+              'export CCACHE_DIR="${CCACHE_DIR:-/work/out/ccache}"',
+              'export CCACHE_MAXSIZE="${CCACHE_MAXSIZE:-4G}"',
+              'exec ccache /usr/bin/clang++-21 "$@"',
+              "EOF",
+              "chmod 0755 /usr/local/bin/clang /usr/local/bin/clang++",
+              "ccache --version | head -1",
+              "",
+          ]
+          s = s[:marker] + "\n".join(L) + "\n" + s[marker:]
           open("podman_container/provision.sh", "w").write(s)
 
           # 2) build-deployd.sh: native static build instead of cross
@@ -99,11 +126,45 @@ jobs:
               grep -v -e '^gcc-aarch64-linux-gnu$' -e '^libc6-dev-arm64-cross$' | \
               sed 's/[[:space:]]*#.*//' | awk 'NF' | sort -u
           } > podman_container/packages-ci.list
+          # ccache for the kernel compile (shim + cache dir wired up in the
+          # provision patch below)
+          echo ccache >> podman_container/packages-ci.list
           echo "--- packages-ci.list:"; cat podman_container/packages-ci.list
           # 4) verify.sh (host side) needs zstd; it is preinstalled on GH
           #    runners, install it explicitly anyway
           sudo apt-get update -q && sudo apt-get install -y --no-install-recommends zstd
           zstd --version
+
+      - name: record cache keys
+        id: revs
+        run: |
+          echo "linux=$(git -C kernel rev-parse HEAD:linux)" >> "$GITHUB_OUTPUT"
+          echo "container=$(git -C podman_container rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      # container rootfs + kernel ccache.  Both are self-validating: runin.sh
+      # re-provisions on any identity mismatch, ccache content-hashes every
+      # compile — a stale hit can't corrupt the build, it just helps less.
+      - name: cache container rootfs
+        uses: actions/cache@v4
+        with:
+          path: |
+            build/kernel/podman-data
+            build/kernel/podman-data-arm64
+          key: podman-arm64-${{ steps.revs.outputs.container }}
+
+      - name: cache kernel ccache
+        uses: actions/cache@v4
+        with:
+          path: build/kernel/ccache
+          key: ccache-kernel-${{ steps.revs.outputs.linux }}
+          restore-keys: ccache-kernel-
+
+      - name: share one container between bl and kernel
+        run: |
+          mkdir -p build/bootloader
+          ln -s ../kernel/podman-data build/bootloader/podman-data
+          # (kernel uses build/kernel/podman-data{,-arm64}; same provision
+          # identity, so bl reuses it instead of provisioning a second copy)
 
       - name: rootless podman prereqs
         run: |
