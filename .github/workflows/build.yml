@@ -59,29 +59,34 @@ jobs:
           assert a in s, "provision.sh arch case not found"
           s = s.replace(a, b)
           # ccache wrappers for the compiler names kbuild invokes (LLVM=1).
-          # The symlinks above stay for the non-compiler tools; clang and
-          # clang++ become wrapper scripts (heredoc-written, shebang at
-          # column 0) pinning CCACHE_DIR to the mounted OUT so the cache
-          # persists on the host across runs.  rm first: writing through
-          # the symlink would overwrite the clang-21 binary itself.
+          # NOTE: provision.sh embeds the container script as a single-quoted
+          # bash -c '...' string, so every line here must avoid single
+          # quotes (hence the unquoted heredoc delimiters and double-quote
+          # shell syntax below).  --version/-v bypasses ccache: edk2 build
+          # scripts probe CLANG_MAJOR via "clang --version | sed" under
+          # pipefail, and ccache hands the bare flag to the real compiler
+          # (no input files, exit 1).  CCACHE_DIR points into the mounted
+          # OUT so the cache persists on the host across runs.
           marker = s.index("# ---- arm64 static busybox")
           L = [
               "# ccache wrappers (compiler names only; see packages-ci.list)",
               "rm -f /usr/local/bin/clang /usr/local/bin/clang++",
-              "cat > /usr/local/bin/clang <<'EOF'",
+              "cat > /usr/local/bin/clang <<CEOF",
               "#!/bin/sh",
+              'case "$1" in --version|-v) exec /usr/bin/clang-21 "$@";; esac',
               'export CCACHE_DIR="${CCACHE_DIR:-/work/out/ccache}"',
               'export CCACHE_MAXSIZE="${CCACHE_MAXSIZE:-4G}"',
               'exec ccache /usr/bin/clang-21 "$@"',
-              "EOF",
-              "cat > /usr/local/bin/clang++ <<'EOF'",
+              "CEOF",
+              "cat > /usr/local/bin/clang++ <<CEOF",
               "#!/bin/sh",
+              'case "$1" in --version|-v) exec /usr/bin/clang++-21 "$@";; esac',
               'export CCACHE_DIR="${CCACHE_DIR:-/work/out/ccache}"',
               'export CCACHE_MAXSIZE="${CCACHE_MAXSIZE:-4G}"',
               'exec ccache /usr/bin/clang++-21 "$@"',
-              "EOF",
+              "CEOF",
               "chmod 0755 /usr/local/bin/clang /usr/local/bin/clang++",
-              "ccache --version | head -1",
+              "clang --version | head -1",
               "",
           ]
           s = s[:marker] + "\n".join(L) + "\n" + s[marker:]
