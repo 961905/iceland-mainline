@@ -268,13 +268,16 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/download-artifact@v4
-        with: { name: products-bl-kernel, path: products }
+        with: { name: products-bl-kernel, path: products, merge-multiple: true }
       - uses: actions/download-artifact@v4
-        with: { name: products-userspace, path: products }
+        with: { name: products-userspace, path: products, merge-multiple: true }
 
       - name: assemble deploy bundle (blob + ramdeploy)
         run: |
           set -e
+          echo "== downloaded products:"
+          find products -maxdepth 2 -type d | sort
+          ls products/kernel/tools/ products/kernel/debs/ 2>/dev/null || true
           # decompress the sparse rootfs
           mkdir -p work
           for zst in products/userspace/*.sparse.img.zst; do
