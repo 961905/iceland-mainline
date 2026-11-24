@@ -296,6 +296,11 @@ jobs:
           done
           SPARSE=$(find work -name '*.sparse.img' | head -1)
           echo "rootfs: $SPARSE ($(du -h "$SPARSE" 2>/dev/null || echo '?'))"
+          # download-artifact extraction is not guaranteed to preserve exec
+          # bits; restore them before the -x test (rounds 8 and 13 died here
+          # with every file present but makeblob failing [ -x ])
+          chmod +x products/kernel/tools/* 2>/dev/null || true
+          echo "makeblob: $(file -b products/kernel/tools/makeblob | cut -c1-60)"
 
           # build the deploy blob (rootfs + 4 kernel debs)
           BLOB=""
