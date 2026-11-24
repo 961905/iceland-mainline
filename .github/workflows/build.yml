@@ -41,9 +41,13 @@ jobs:
           # tree (NOT branch tips): round 13->14 the upstream kernel repo moved
           # its linux submodule pointer one commit and the build went from
           # green to silently failing.  Pin = reproducible builds.
+          # submodule update --init checks out the gitlinks recorded at the
+          # pinned parent (incl. nested: bootloader/edk2, kernel/linux) —
+          # round 15 missed this for bootloader and edksetup.sh vanished.
           pin() {  # pin <repo-url> <path> <sha>
             git clone "$1" "$2"
             git -C "$2" checkout --detach "$3"
+            git -C "$2" submodule update --init --depth 1 --recursive
           }
           pin https://github.com/SuperTurtleDev/iceland-mainline-kernel.git kernel \
             "$(git ls-tree HEAD kernel | awk '{print $3}')"
@@ -51,10 +55,7 @@ jobs:
             "$(git ls-tree HEAD bootloader | awk '{print $3}')"
           pin https://github.com/SuperTurtleDev/iceland-build-container.git podman_container \
             "$(git ls-tree HEAD podman_container | awk '{print $3}')"
-          # linux/firmware are nested submodules of kernel/ — pin those too
-          git -C kernel submodule update --init --depth 1 linux firmware
-          git -C kernel/linux  checkout --detach "$(git -C kernel ls-tree HEAD linux | awk '{print $3}')"
-          git -C kernel/firmware checkout --detach "$(git -C kernel ls-tree HEAD firmware | awk '{print $3}')"
+          echo "pinned: kernel=$(git -C kernel rev-parse HEAD) linux=$(git -C kernel/linux rev-parse HEAD) bl=$(git -C bootloader rev-parse HEAD) edk2=$(git -C bootloader/edk2 rev-parse HEAD) container=$(git -C podman_container rev-parse HEAD)"
 
       - name: "patch: all-arm64 containers (no emulation)"
         run: |
@@ -207,6 +208,7 @@ jobs:
       - name: kernel failure diagnostics
         if: failure()
         run: |
+          set +e   # diagnostics must run to completion even on missing paths
           K=../build/kernel
           L="$K/logs/kernel-build.log"
           echo "=== disk ===";   df -h / /home 2>/dev/null; du -sh "$K" 2>/dev/null
